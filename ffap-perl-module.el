@@ -3,7 +3,7 @@
 ;; Copyright 2009, 2010 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 11
+;; Version: 12
 ;; Keywords: files
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -57,8 +57,13 @@
 ;; Version 9 - set ffap-string-at-point variable
 ;; Version 10 - undo defadvice on unload-feature
 ;; Version 11 - don't search for RFCs, notice $HOME etc vars
+;; Version 12 - express dependency on 'advice
 
 ;;; Code:
+
+;; for `ad-find-advice' macro when running uncompiled
+;; (don't unload 'advice before our -unload-function)
+(require 'advice)
 
 ;;;###autoload
 (defcustom ffap-perl-module-path nil
