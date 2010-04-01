@@ -3,7 +3,7 @@
 ;; Copyright 2009, 2010 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 12
+;; Version: 13
 ;; Keywords: files
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -58,6 +58,7 @@
 ;; Version 10 - undo defadvice on unload-feature
 ;; Version 11 - don't search for RFCs, notice $HOME etc vars
 ;; Version 12 - express dependency on 'advice
+;; Version 13 - ignore errors from substitute-in-filename
 
 ;;; Code:
 
@@ -86,11 +87,7 @@ See `ffap-perl-module-file-at-point' for details."
   ;; all the perl dirs when it's a filename rather than a module.
   ;;
   (unless (and (not mode)
-               (not (let ((filename (ffap-string-at-point 'file)))
-                      (and filename
-                           (setq filename (substitute-in-file-name filename))
-                           (or (ffap-file-remote-p filename)
-                               (file-exists-p filename)))))
+               (not (ffap-perl-module-existing-file-at-point-p))
                (let ((filename (ffap-perl-module-file-at-point)))
                  (and filename
                       (progn
@@ -100,10 +97,33 @@ See `ffap-perl-module-file-at-point' for details."
     ad-do-it))
 
 (defun ffap-perl-module-unload-function ()
+  "Remove advice on `ffap-string-at-point'.
+This is called by `unload-feature'."
   (when (ad-find-advice 'ffap-string-at-point 'around 'ffap-perl-module)
     (ad-remove-advice   'ffap-string-at-point 'around 'ffap-perl-module)
     (ad-activate        'ffap-string-at-point))
   nil) ;; and do normal unload-feature actions too
+
+(defun ffap-perl-module-existing-file-at-point-p ()
+  "Return non-nil if there's a filename at point and that file exists."
+
+  ;; `substitute-in-file-name' throws an error for an unknown environment
+  ;; variable "$NOSUCH" or "${NOSUCH}", or an unpaired brace "${HOME",
+  ;; though in emacs22 up it's more relaxed, allowing "$NOSUCH" but error on
+  ;; "${NOSUCH}".  Braces are not in (ffap-string-at-point 'file) by
+  ;; default, only if you extend the chars in
+  ;; `ffap-string-at-point-mode-alist'.
+  ;;
+  (let ((filename (ffap-string-at-point 'file)))
+    (and filename
+         ;; unknown ${NOSUCH} variables treated as a non-existent filename
+         (condition-case nil
+             (setq filename (substitute-in-file-name filename))
+           (error nil))
+         ;; any remote syntax filename is considered to exist
+         (or (ffap-file-remote-p filename)
+             (file-exists-p filename)))))
+
 
 (defun ffap-perl-module-path ()
   "Return a list of directory names to search for perl modules.
