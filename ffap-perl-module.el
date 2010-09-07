@@ -3,7 +3,7 @@
 ;; Copyright 2009, 2010 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 13
+;; Version: 15
 ;; Keywords: files
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -24,16 +24,21 @@
 
 ;;; Commentary:
 
-;; This spot of code lets M-x ffap find the source file for a perl module.
-;; For example Foo::Bar becomes /usr/share/perl5/Foo/Bar.pm or wherever is
-;; in the path.
+;; This spot of code lets M-x ffap find the source file for a Perl module.
+;; For example Foo::Bar becomes /usr/share/perl5/Foo/Bar.pm or wherever in
+;; the path.
 ;;
-;; Variable names or subpackages are stripped, and a prefix is added if
+;; Variable names or sub-packages are stripped, and a prefix is added if
 ;; unique.  See the `ffap-perl-module-file-at-point' docstring below for
 ;; details.
 ;;
 ;; The lookup is independent of the major mode, so you can be in Man-mode,
-;; diff-mode, pod-mode or whatever and still go to perl source.
+;; diff-mode, pod-mode or whatever and still go to Perl source.
+
+;;; Emacsen:
+
+;; Designed for Emacs 21 up.  Works in Emacs 20 and XEmacs 21 except for
+;; non-ASCII in Perl class names and variable names.
 
 ;;; Install:
 
@@ -59,6 +64,8 @@
 ;; Version 11 - don't search for RFCs, notice $HOME etc vars
 ;; Version 12 - express dependency on 'advice
 ;; Version 13 - ignore errors from substitute-in-filename
+;; Version 14 - recognise -MFoo::Bar and -MO=Foo perl command line
+;; Version 15 - recognise Moose/Mouse extends 'Some::Class'
 
 ;;; Code:
 
@@ -68,9 +75,9 @@
 
 ;;;###autoload
 (defcustom ffap-perl-module-path nil
-  "List of directories to search for perl modules.
+  "List of directories to search for Perl modules.
 If nil then function `ffap-perl-module-path' initializes it from
-Perl's @INC when you first attempt an `ffap' perl module lookup."
+Perl's @INC when you first attempt an `ffap' Perl module lookup."
   :type  '(repeat directory)
   :group 'ffap
   :link '(url-link
@@ -78,7 +85,7 @@ Perl's @INC when you first attempt an `ffap' perl module lookup."
           "http://user42.tuxfamily.org/ffap-perl-module/index.html"))
 
 (defadvice ffap-string-at-point (around ffap-perl-module activate)
-  "Extract a perl module filename at point.
+  "Extract a Perl module filename at point.
 See `ffap-perl-module-file-at-point' for details."
 
   ;; The expand-prefix stuff is a bit slow, so only run for mode==nil, not
@@ -97,7 +104,7 @@ See `ffap-perl-module-file-at-point' for details."
     ad-do-it))
 
 (defun ffap-perl-module-unload-function ()
-  "Remove advice on `ffap-string-at-point'.
+  "Remove advice on function `ffap-string-at-point'.
 This is called by `unload-feature'."
   (when (ad-find-advice 'ffap-string-at-point 'around 'ffap-perl-module)
     (ad-remove-advice   'ffap-string-at-point 'around 'ffap-perl-module)
@@ -126,10 +133,10 @@ This is called by `unload-feature'."
 
 
 (defun ffap-perl-module-path ()
-  "Return a list of directory names to search for perl modules.
+  "Return a list of directory names to search for Perl modules.
 This function returns variable `ffap-perl-module-path' if it's not nil,
 or initializes that by running \"perl -e print @INC\" for the
-places perl will look, which is usually various /usr/share, /usr/local,
+places Perl will look, which is usually various /usr/share, /usr/local,
 and whatever your PERL5LIB says.
 
 The current directory \".\" which is normally in @INC is
@@ -144,13 +151,13 @@ churn deep through irrelevant directories."
               (process-connection-type nil)) ;; pipe
           (call-process "perl" nil t nil "-e" "$,='\n'; print @INC"))
         (setq ffap-perl-module-path
-              (or (remove "." (split-string (buffer-string) "\n"))
+              (or (delete "." (split-string (buffer-string) "\n"))
                   ;; something non-empty as a fallback
                   '("/usr/share/perl"))))))
 
-;; No [:alnum:] etc in xemacs21, fallback to A-Z etc.  Which means unicode
-;; in variable names doesn't match there, you have to have point on the
-;; (ascii) package name part.  What would be an easy better way?
+;; No [:alnum:] etc in emacs20,xemacs21, fallback to A-Z etc.  Which means
+;; unicode in variable names doesn't match there, you have to have point on
+;; the (ascii) package name part.  What would be an easy better way?
 (eval-and-compile
   (let* ((alpha (if (string-match "[[:alpha:]]" "A") "[:alpha:]" "A-Za-z0-9"))
          (alnum (if (string-match "[[:alnum:]]" "A") "[:alnum:]" "A-Za-z0-9"))
@@ -178,17 +185,19 @@ in variable names, and even in the package names (caveats as per
 xemacs21.")))
 
 (defun ffap-perl-module-file-at-point ()
-  "Find the filename for a perl module at point.
+  "Find the filename for a Perl module at point.
 For example with point on Foo::Bar the return could be
 \"/usr/share/perl5/Foo/Bar.pm\".  If there's nothing in
 `ffap-perl-module-path' for a package at point then the return is
 nil.
 
-* $Foo::Bar::QUUX, &{Foo::Bar::QUUX} etc are recognised as
-  variable or subroutine names and the package part is Foo::Bar.
+* -MFoo::Bar is recognised as a command line module Foo::Bar, and
+  -MO=Concise as compile output B::Concise etc.
 
-  Currently this isn't applied to a plain calls Foo::Bar::func(),
-  but they're pruned by the following rule so normally works ok.
+* $Foo::Bar::QUUX, &{Foo::Bar::QUUX} etc are variable or
+  subroutine names and the package part is Foo::Bar.  Currently
+  this isn't applied to a plain calls Foo::Bar::func(), but
+  they're pruned by the next rule so normally work ok.
 
 * Foo::Bar::Quux is pruned back to Foo::Bar, or just Foo, if the
   full package doesn't exist.  This is good if a single file
@@ -196,19 +205,25 @@ nil.
   constant subr, etc.  It hopefully gets you close to the right
   package at least.
 
+* \"use Foo\", \"no Foo\", \"require Foo\" and Moose style
+  \"extends 'Foo'\" are all work with point in the \"use\" part
+  etc as well as the package name part.  This is good when point
+  is at the start of such a line.
+
 * Client::DNS or similar shorthand is expanded to say
   POE::Component::Client::DNS if that's the only Client::DNS.
   This is good in documentation where a long package prefix might
-  be omitted, eg. in POE or Perl::Critic.
+  be omitted, eg. POE or Perl::Critic.
 
-  The search for this may take a few of seconds depending how
-  much is in your `ffap-perl-module-path' and its subdirectories.
+  The search for this may take several seconds depending how much
+  is in your `ffap-perl-module-path' and subdirectories.  Use
+  \\[keyboard-quit] in the usual way to stop it.
 
 * A single word at point without any \"::\", like say Symbol,
-  will go to Symbol.pm for the few top-level perl modules.  But a
+  will go to Symbol.pm for the few top-level Perl modules.  But a
   leading or trailing / or . is taken to mean a filename, not a
   package name, and the return is nil in that case.  The latter
-  prevents say the \"sort\" of \"sort.el\" offering sort.pm.
+  prevents say the \"sort\" in \"sort.el\" offering sort.pm.
 
 * If there's no .pm file for the package but there's a .pod then
   that's returned.  This is good for pseudo-packages like
@@ -217,15 +232,14 @@ nil.
 * PoCo is recognised as an abbreviation for POE::Component.  It's
   found in documentation but the code is always the full name.
 
-* Non-ascii variable names work fine in Emacs, but are not
-  matched in XEmacs21 (ensure point is on the package name part
-  instead).
+* Non-ascii variable names work in Emacs, but are not matched in
+  XEmacs21.  Put point on the package name part instead.
 
-  Non-ascii package names are matched (in Emacs), but it's up to
-  you to ensure perl \"use utf8\", and that your locale, and
-  emacs `file-name-coding-system', and the actual bytes in the
-  name on disk, all coincide.  That may be asking for trouble
-  most of the time! :-)
+  Non-ascii package names are matched in Emacs, but it's up to
+  you to ensure any Perl \"use utf8\" and your locale and Emacs
+  `file-name-coding-system' and the actual bytes in the name on
+  disk all coincide.  That may be asking for trouble most of the
+  time! :-)
 
 This function is designed for use under `ffap' so it sets
 `ffap-string-at-point-region' to the part of the buffer
@@ -268,23 +282,61 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
       ;; matched.  There's nothing else done with the fact it's making a
       ;; ref, it's just for point at the start of such a form.
       ;;
-      (and (or (and (thing-at-point-looking-at
-                     (concat "\\\\*[$@%&]\\s-*"
-                             ffap-perl-module-qualif-regexp))
-                    (setq type 'variable))
+      (and (or
+            ;; command line: perl -MList::Util
+            (and (thing-at-point-looking-at
+                  (concat "\\(?:\\(?:\\`\\|\\s-\\)-MO=\\)"
+                          ffap-perl-module-qualif-regexp))
+                 (setq type 'use-B))
 
-               (and (thing-at-point-looking-at
-                     (concat "\\\\*[$@%&]\\s-*{\\s-*"
-                             ffap-perl-module-qualif-regexp
-                             "\\s-*}"))
-                    (setq type 'variable))
+            ;; command line: perl -MO=Concise
+            (and (thing-at-point-looking-at
+                  (concat "\\(?:\\(?:\\`\\|\\s-\\)-M\\)"
+                          ffap-perl-module-qualif-regexp))
+                 (setq type 'use))
 
-               (and (thing-at-point-looking-at
-                     (concat "\\(?:use\\|no\\|require\\)\\s-+"
-                             ffap-perl-module-qualif-regexp))
-                    (setq type 'use))
+            ;; variable: $List::Util::something
+            ;;           @Foo::Bar::something
+            ;; varref:   \\\%List::Util::something
+            ;; subr:     &List::Util::first
+            (and (thing-at-point-looking-at
+                  (concat "\\\\*[$@%&]\\s-*"
+                          ffap-perl-module-qualif-regexp))
+                 (setq type 'variable))
 
-               (thing-at-point-looking-at ffap-perl-module-qualif-regexp))
+            ;; variable: ${Foo::Bar::something}
+            ;; varref:   \\@{Foo::Bar::something}
+            ;; etc
+            (and (thing-at-point-looking-at
+                  (concat "\\\\*[$@%&]\\s-*{\\s-*"
+                          ffap-perl-module-qualif-regexp
+                          "\\s-*}"))
+                 (setq type 'variable))
+
+            ;; module: use warnings ...
+            ;;         no strict;
+            ;;         require List::Util;
+            (and (thing-at-point-looking-at
+                  (concat "\\(?:use\\|no\\|require\\)\\s-+"
+                          ffap-perl-module-qualif-regexp))
+                 (setq type 'use))
+
+            ;; Moose: extends 'List::Util'
+            ;;        extends "List::Util"
+            ;;        extends qw(Pod::Elemental)
+            ;; same in Mouse
+            (and (thing-at-point-looking-at
+                  (concat "\\(?:extends\\)\\s-+\\(?:['\"]\\|qw(\\)"
+                          ffap-perl-module-qualif-regexp
+                          "['\")]"))
+                 (setq type 'use))
+
+            ;; plain: List::Util
+            ;; double-colon barword: List::Util::
+            ;; (match the final :: so it works with point on those colons)
+            (thing-at-point-looking-at
+             (concat ffap-perl-module-qualif-regexp
+                     "\\(::\\)?")))
 
            ;; don't chase down a bare word "Changes", prefer a normal ffap
            ;; of a file called Changes in the local directory instead of
@@ -301,10 +353,10 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
                       (string-match "\\`RFC[ 0-9]*\\'" (match-string 1)))))
 
            ;; leading or trailing / or . on a single word means a filename
-           (or type ;; "use Foo." or "$Foo." is ok to keep going
+           (or type ;; but "use Foo." or "$Foo." is ok to keep going
                (match-beginning 2) ;; match 2 means multi-word, is ok
                (and (not (memq (char-before (match-beginning 0)) '(?/ ?.)))
-                    (not (memq (char-after (match-end 0)) '(?/ ?.)))))
+                    (not (memq (char-after  (match-end 0))       '(?/ ?.)))))
 
            ;; functions and variables $FOO or &foo must have at least one ::
            ;; qualifier for the package part
@@ -319,24 +371,27 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
                            (match-beginning 2) ;; before last "::foo"
                          (match-end 1))))
 
-           (let* ((modname (apply 'buffer-substring
-                                  ffap-string-at-point-region))
-                  (basename (ffap-perl-module-modname-to-filename modname)))
+           (let ((modname (apply 'buffer-substring
+                                 ffap-string-at-point-region)))
+             (if (eq type 'use-B)
+                 (setq modname (concat "B::" modname)
+                       type    'use))
+             (let ((basename (ffap-perl-module-modname-to-filename modname)))
 
-             (when (string-match "\\`PoCo\\(::.*\\)?\\'" modname)
-               (setq modname (concat "POE::Component"
-                                     (match-string 1 modname))))
+               (when (string-match "\\`PoCo\\(::.*\\)?\\'" modname)
+                 (setq modname (concat "POE::Component"
+                                       (match-string 1 modname))))
 
-             ;; prefer .pm over .pod, even if .pod is earlier in the path
-             (or (ffap-locate-file basename '(".pm") (ffap-perl-module-path))
-                 (ffap-locate-file basename '(".pod") (ffap-perl-module-path))
+               ;; prefer .pm over .pod, even if .pod is earlier in the path
+               (or (ffap-locate-file basename '(".pm") (ffap-perl-module-path))
+                   (ffap-locate-file basename '(".pod") (ffap-perl-module-path))
 
-                 ;; if there's no exact match then try the prefix business (but
-                 ;; not on variables), then suffix pruning
-                 (and (not (eq type 'variable))
-                      (ffap-perl-module-expand-prefix modname))
+                   ;; if there's no exact match then try the prefix business (but
+                   ;; not on variables), then suffix pruning
+                   (and (not (eq type 'variable))
+                        (ffap-perl-module-expand-prefix modname))
 
-                 (ffap-perl-module-prune-suffix modname)))))))
+                   (ffap-perl-module-prune-suffix modname))))))))
 
 (defun ffap-perl-module-expand-prefix (modname)
   "Try to find MODNAME by putting a package prefix on it.
@@ -466,10 +521,12 @@ shortened according to how much was pruned off MODNAME."
                              (match-string 1 modname))))))))
 
 (defun ffap-perl-module-modname-to-filename (modname)
-  "Return a filename for perl module MODNAME.
+  "Return a filename for Perl module MODNAME.
 MODNAME is a string like \"Foo::Bar::Quux\", the return simply
 has each \"::\" turned into \"/\" like \"Foo/Bar/Quux\"."
   (mapconcat 'identity (split-string modname ":+") "/"))
+
+;; LocalWords: usr docstring initializes func MFoo Quux subr PoCo Xyzzy Aaa Bbb Ccc Ddd
 
 (provide 'ffap-perl-module)
 
