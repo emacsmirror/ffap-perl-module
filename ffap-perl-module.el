@@ -3,7 +3,7 @@
 ;; Copyright 2009, 2010 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 15
+;; Version: 16
 ;; Keywords: files
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -37,8 +37,8 @@
 
 ;;; Emacsen:
 
-;; Designed for Emacs 21 up.  Works in Emacs 20 and XEmacs 21 except for
-;; non-ASCII in Perl class names and variable names.
+;; Designed for Emacs 21 up.  Works in Emacs 20 and XEmacs 21 except doesn't
+;; recognise non-ASCII in Perl class names and variable names.
 
 ;;; Install:
 
@@ -66,6 +66,8 @@
 ;; Version 13 - ignore errors from substitute-in-filename
 ;; Version 14 - recognise -MFoo::Bar and -MO=Foo perl command line
 ;; Version 15 - recognise Moose/Mouse extends 'Some::Class'
+;; Version 16 - fix operators "&" and "&&" are not funcs
+;;            - try one-level suffix prune before big prefix expand search
 
 ;;; Code:
 
@@ -158,14 +160,16 @@ churn deep through irrelevant directories."
 ;; No [:alnum:] etc in emacs20,xemacs21, fallback to A-Z etc.  Which means
 ;; unicode in variable names doesn't match there, you have to have point on
 ;; the (ascii) package name part.  What would be an easy better way?
-(eval-and-compile
-  (let* ((alpha (if (string-match "[[:alpha:]]" "A") "[:alpha:]" "A-Za-z0-9"))
-         (alnum (if (string-match "[[:alnum:]]" "A") "[:alnum:]" "A-Za-z0-9"))
-         (word  (concat "[" alpha "_][" alnum "_]*")))
-
-    (defconst ffap-perl-module-directory-regexp
-      (concat "\\`" word "\\'")
-      "Regexp for a directory name for packages.
+;;
+(defconst ffap-perl-module-directory-regexp
+  (eval-when-compile
+    (let* ((alpha (if (string-match "[[:alpha:]]" "A")
+                      "[:alpha:]" "A-Za-z0-9"))
+           (alnum (if (string-match "[[:alnum:]]" "A")
+                      "[:alnum:]" "A-Za-z0-9"))
+           (word  (concat "[" alpha "_][" alnum "_]*")))
+      (concat "\\`" word "\\'")))
+  "Regexp for a directory name for packages.
 This matches only a single word like \"Moose\" without any \"/\"s
 etc.  It doesn't match .pm files to save some stat()s, and
 doesn't match . or .. to avoid an infinite loop searching!
@@ -174,15 +178,22 @@ doesn't match . or .. to avoid an infinite loop searching!
 unicode in package names, if you're brave enough to have
 filenames in unicode.  A-Z fallbacks are used for xemacs21.")
 
-    (defconst ffap-perl-module-qualif-regexp
-      (concat "\\(" word "\\(" "::" word "\\)*\\)")
-      "Regexp for a name with optional :: qualifiers.
+(eval-and-compile ;; for use in compile-time concats
+  (defconst ffap-perl-module-qualif-regexp
+    (eval-when-compile
+      (let* ((alpha (if (string-match "[[:alpha:]]" "A")
+                        "[:alpha:]" "A-Za-z0-9"))
+             (alnum (if (string-match "[[:alnum:]]" "A")
+                        "[:alnum:]" "A-Za-z0-9"))
+             (word  (concat "[" alpha "_][" alnum "_]*")))
+        (concat "\\(" word "\\(" "::" word "\\)*\\)")))
+    "Regexp for a name with optional :: qualifiers.
 This matches for instance \"FindBin\" or \"Moose::Util::something\".
 
 \[:alpha:] and [:alnum:] are used when available to allow unicode
 in variable names, and even in the package names (caveats as per
 `ffap-perl-module-directory-regexp').  A-Z fallbacks are used for
-xemacs21.")))
+xemacs21."))
 
 (defun ffap-perl-module-file-at-point ()
   "Find the filename for a Perl module at point.
@@ -285,14 +296,16 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
       (and (or
             ;; command line: perl -MList::Util
             (and (thing-at-point-looking-at
-                  (concat "\\(?:\\(?:\\`\\|\\s-\\)-MO=\\)"
-                          ffap-perl-module-qualif-regexp))
+                  (eval-when-compile
+                    (concat "\\(?:\\(?:\\`\\|\\s-\\)-MO=\\)"
+                            ffap-perl-module-qualif-regexp)))
                  (setq type 'use-B))
 
             ;; command line: perl -MO=Concise
             (and (thing-at-point-looking-at
-                  (concat "\\(?:\\(?:\\`\\|\\s-\\)-M\\)"
-                          ffap-perl-module-qualif-regexp))
+                  (eval-when-compile
+                    (concat "\\(?:\\(?:\\`\\|\\s-\\)-M\\)"
+                            ffap-perl-module-qualif-regexp)))
                  (setq type 'use))
 
             ;; variable: $List::Util::something
@@ -300,25 +313,28 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
             ;; varref:   \\\%List::Util::something
             ;; subr:     &List::Util::first
             (and (thing-at-point-looking-at
-                  (concat "\\\\*[$@%&]\\s-*"
-                          ffap-perl-module-qualif-regexp))
+                  (eval-when-compile
+                    (concat "\\\\*[$@%&]"
+                            ffap-perl-module-qualif-regexp)))
                  (setq type 'variable))
 
             ;; variable: ${Foo::Bar::something}
             ;; varref:   \\@{Foo::Bar::something}
             ;; etc
             (and (thing-at-point-looking-at
-                  (concat "\\\\*[$@%&]\\s-*{\\s-*"
-                          ffap-perl-module-qualif-regexp
-                          "\\s-*}"))
+                  (eval-when-compile
+                    (concat "\\\\*[$@%&]\\s-*{\\s-*"
+                            ffap-perl-module-qualif-regexp
+                            "\\s-*}")))
                  (setq type 'variable))
 
             ;; module: use warnings ...
             ;;         no strict;
             ;;         require List::Util;
             (and (thing-at-point-looking-at
-                  (concat "\\(?:use\\|no\\|require\\)\\s-+"
-                          ffap-perl-module-qualif-regexp))
+                  (eval-when-compile
+                    (concat "\\(?:use\\|no\\|require\\)\\s-+"
+                            ffap-perl-module-qualif-regexp)))
                  (setq type 'use))
 
             ;; Moose: extends 'List::Util'
@@ -326,17 +342,19 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
             ;;        extends qw(Pod::Elemental)
             ;; same in Mouse
             (and (thing-at-point-looking-at
-                  (concat "\\(?:extends\\)\\s-+\\(?:['\"]\\|qw(\\)"
-                          ffap-perl-module-qualif-regexp
-                          "['\")]"))
+                  (eval-when-compile
+                    (concat "\\(?:extends\\)\\s-+\\(?:['\"]\\|qw(\\)"
+                            ffap-perl-module-qualif-regexp
+                            "['\")]")))
                  (setq type 'use))
 
             ;; plain: List::Util
             ;; double-colon barword: List::Util::
             ;; (match the final :: so it works with point on those colons)
             (thing-at-point-looking-at
-             (concat ffap-perl-module-qualif-regexp
-                     "\\(::\\)?")))
+             (eval-when-compile
+               (concat ffap-perl-module-qualif-regexp
+                       "\\(::\\)?"))))
 
            ;; don't chase down a bare word "Changes", prefer a normal ffap
            ;; of a file called Changes in the local directory instead of
@@ -386,8 +404,12 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
                (or (ffap-locate-file basename '(".pm") (ffap-perl-module-path))
                    (ffap-locate-file basename '(".pod") (ffap-perl-module-path))
 
-                   ;; if there's no exact match then try the prefix business (but
-                   ;; not on variables), then suffix pruning
+                   ;; try to prune one level, to avoid the big expand search
+                   ;; for a List::Util::first etc call
+                   (ffap-perl-module-prune-suffix modname 1)
+
+                   ;; if there's no exact match then try the prefix business
+                   ;; (but not on variables), then suffix pruning
                    (and (not (eq type 'variable))
                         (ffap-perl-module-expand-prefix modname))
 
@@ -482,14 +504,16 @@ rules."
       (or found-pm-filename
           found-pod-filename))))
           
-(defun ffap-perl-module-prune-suffix (modname)
+(defun ffap-perl-module-prune-suffix (modname &optional limit)
+  ;; checkdoc-params: (modname limit)
   "Try to match MODNAME with suffix parts pruned off.
-This some internals of `ffap-perl-module-file-at-point.
+This is an internal part of `ffap-perl-module-file-at-point.
 
 MODNAME like \"Aaa::Bbb::Ccc::Ddd\" is looked up shortened first
 to \"Aaa::Bbb::Ccc\" then \"Aaa::Bbb\" and finally \"Aaa\".  The
 return is a filename string, or nil if not found.  At each
-pruning level .pm is tried then .pod.
+pruning level .pm is tried then .pod.  If LIMIT is not nil then
+it's the number of prune levels to try.
 
 If found then the endpoint in `ffap-string-at-point-region' is
 shortened according to how much was pruned off MODNAME."
@@ -515,6 +539,10 @@ shortened according to how much was pruned off MODNAME."
                                 (- (length orig) (length modname))))))
             (throw 'stop filename))
 
+          (and limit
+               (< (decf limit) 0)
+               (throw 'stop nil))
+          
           ;; strip last so Foo::Bar::Quux becomes Foo::Bar, or nil when no
           ;; more "::"s
           (setq modname (and (string-match "\\(.*\\)::" modname)
@@ -526,7 +554,7 @@ MODNAME is a string like \"Foo::Bar::Quux\", the return simply
 has each \"::\" turned into \"/\" like \"Foo/Bar/Quux\"."
   (mapconcat 'identity (split-string modname ":+") "/"))
 
-;; LocalWords: usr docstring initializes func MFoo Quux subr PoCo Xyzzy Aaa Bbb Ccc Ddd
+;; LocalWords: usr docstring initializes func MFoo Quux subr PoCo Xyzzy Aaa Bbb Ccc Ddd stat alnum fallbacks
 
 (provide 'ffap-perl-module)
 
