@@ -1,9 +1,9 @@
 ;;; ffap-perl-module.el --- find perl module at point with ffap
 
-;; Copyright 2009, 2010 Kevin Ryde
+;; Copyright 2009, 2010, 2011 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 16
+;; Version: 17
 ;; Keywords: files
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -68,11 +68,12 @@
 ;; Version 15 - recognise Moose/Mouse extends 'Some::Class'
 ;; Version 16 - fix operators "&" and "&&" are not funcs
 ;;            - try one-level suffix prune before big prefix expand search
+;; Version 17 - recognise Symbol.pm etc one word with .pm
 
 ;;; Code:
 
-;; for `ad-find-advice' macro when running uncompiled
-;; (don't unload 'advice before our -unload-function)
+;; for `ad-find-advice' macro when running uncompiled,
+;; don't unload 'advice before ffap-perl-module-unload-function
 (require 'advice)
 
 ;;;###autoload
@@ -95,14 +96,16 @@ See `ffap-perl-module-file-at-point' for details."
   ;; a search, in particular this stops "Makefile" at point from churning
   ;; all the perl dirs when it's a filename rather than a module.
   ;;
-  (unless (and (not mode)
-               (not (ffap-perl-module-existing-file-at-point-p))
-               (let ((filename (ffap-perl-module-file-at-point)))
-                 (and filename
-                      (progn
-                        (set-text-properties 0 (length filename) nil filename)
-                        (setq ad-return-value
-                              (setq ffap-string-at-point filename))))))
+  ;; args: (ffap-string-at-point &optional MODE)
+  (unless (let ((mode (ad-get-arg 0)))
+            (and (not mode)
+                 (not (ffap-perl-module-existing-file-at-point-p))
+                 (let ((filename (ffap-perl-module-file-at-point)))
+                   (and filename
+                        (progn
+                          (set-text-properties 0 (length filename) nil filename)
+                          (setq ad-return-value
+                                (setq ffap-string-at-point filename)))))))
     ad-do-it))
 
 (defun ffap-perl-module-unload-function ()
@@ -179,6 +182,22 @@ unicode in package names, if you're brave enough to have
 filenames in unicode.  A-Z fallbacks are used for xemacs21.")
 
 (eval-and-compile ;; for use in compile-time concats
+  (defconst ffap-perl-module-word-regexp
+    (eval-when-compile
+      (let* ((alpha (if (string-match "[[:alpha:]]" "A")
+                        "[:alpha:]" "A-Za-z0-9"))
+             (alnum (if (string-match "[[:alnum:]]" "A")
+                        "[:alnum:]" "A-Za-z0-9")))
+        (concat "[" alpha "_][" alnum "_]*")))
+    "Regexp for a name with optional :: qualifiers.
+This matches for instance \"FindBin\" or \"Moose::Util::something\".
+
+\[:alpha:] and [:alnum:] are used when available to allow unicode
+in variable names, and even in the package names (caveats as per
+`ffap-perl-module-directory-regexp').  A-Z fallbacks are used for
+xemacs21."))
+
+(eval-and-compile ;; for use in compile-time concats
   (defconst ffap-perl-module-qualif-regexp
     (eval-when-compile
       (let* ((alpha (if (string-match "[[:alpha:]]" "A")
@@ -217,9 +236,9 @@ nil.
   package at least.
 
 * \"use Foo\", \"no Foo\", \"require Foo\" and Moose style
-  \"extends 'Foo'\" are all work with point in the \"use\" part
-  etc as well as the package name part.  This is good when point
-  is at the start of such a line.
+  \"extends 'Foo'\" all work with point in the \"use\" part etc
+  as well as the package name part, which is good when point is
+  at the start of such a line.
 
 * Client::DNS or similar shorthand is expanded to say
   POE::Component::Client::DNS if that's the only Client::DNS.
@@ -230,18 +249,24 @@ nil.
   is in your `ffap-perl-module-path' and subdirectories.  Use
   \\[keyboard-quit] in the usual way to stop it.
 
-* A single word at point without any \"::\", like say Symbol,
-  will go to Symbol.pm for the few top-level Perl modules.  But a
-  leading or trailing / or . is taken to mean a filename, not a
-  package name, and the return is nil in that case.  The latter
-  prevents say the \"sort\" in \"sort.el\" offering sort.pm.
+* constant.pm etc one word with .pm or .pod is recognised, it
+  being sometimes clearer to write a .pm when referring to the
+  toplevel modules.
+
+* constant etc one word without any \"::\" will go to constant.pm
+  for the toplevel Perl modules.  But a leading or trailing / or
+  . is taken to mean a filename, not a package name, and the
+  return is nil in that case.  The latter rule prevents for
+  instance \"sort.el\" from offering sort.pm.
 
 * If there's no .pm file for the package but there's a .pod then
   that's returned.  This is good for pseudo-packages like
-  Module::Build::Cookbook which are just documentation.
+  Module::Build::Cookbook which are just documentation.  \(A
+  toplevel like Carp.pod with \".pod\" of course prefers the .pod
+  to the .pm.)
 
-* PoCo is recognised as an abbreviation for POE::Component.  It's
-  found in documentation but the code is always the full name.
+* PoCo is recognised as an abbreviation for POE::Component, as
+  found in documentation (the code is always the full name).
 
 * Non-ascii variable names work in Emacs, but are not matched in
   XEmacs21.  Put point on the package name part instead.
@@ -255,6 +280,12 @@ nil.
 This function is designed for use under `ffap' so it sets
 `ffap-string-at-point-region' to the part of the buffer
 identified as the package name.
+
+`ffap' normally takes \"constant.pm\" etc as a host name, since
+.pm is a toplevel internet domain (\"Saint Pierre and
+Miquelon\").  But with this ffap-perl-module, the way `ffap'
+looks for local files before machines means a .pm Perl module is
+tried before a ping of a foo.pm machine.
 
 The ffap-perl-module.el home page is
 URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
@@ -275,7 +306,9 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
 
     ;; IN-USE-P is non-nil if we're looking at a "use", "no" or "require"
     (let* ((case-fold-search nil)
-           (type nil))
+           (ext1 '(".pm"))
+           (ext2 '(".pod"))
+           type)
 
       ;; `thing-at-point-looking-at' doesn't work well on a pattern with
       ;; optional variable length prefix like say "\\(@\\s-*\\)?foo".  It's
@@ -294,14 +327,14 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
       ;; ref, it's just for point at the start of such a form.
       ;;
       (and (or
-            ;; command line: perl -MList::Util
+            ;; command line: -MList::Util
             (and (thing-at-point-looking-at
                   (eval-when-compile
                     (concat "\\(?:\\(?:\\`\\|\\s-\\)-MO=\\)"
                             ffap-perl-module-qualif-regexp)))
                  (setq type 'use-B))
 
-            ;; command line: perl -MO=Concise
+            ;; command line: -MO=Concise
             (and (thing-at-point-looking-at
                   (eval-when-compile
                     (concat "\\(?:\\(?:\\`\\|\\s-\\)-M\\)"
@@ -348,13 +381,23 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
                             "['\")]")))
                  (setq type 'use))
 
+            ;; one word with pm: constant.pm Test.pod Inline.pm Inline.pod
+            (and (thing-at-point-looking-at
+                  (eval-when-compile ;; match 1 part to highlight and search
+                    (concat "\\(" ffap-perl-module-word-regexp
+                            "\\)\\.\\(pm\\|pod\\)")))
+                 (progn
+                   (when (equal (match-string 2) "pod")
+                     (setq ext1 '(".pod")  ;; search pod first if .pod
+                           ext2 '(".pm")))
+                   (setq type 'pm)))
+
             ;; plain: List::Util
-            ;; double-colon barword: List::Util::
+            ;; double-colon bareword: List::Util::
             ;; (match the final :: so it works with point on those colons)
             (thing-at-point-looking-at
              (eval-when-compile
-               (concat ffap-perl-module-qualif-regexp
-                       "\\(::\\)?"))))
+               (concat ffap-perl-module-qualif-regexp "\\(::\\)?"))))
 
            ;; don't chase down a bare word "Changes", prefer a normal ffap
            ;; of a file called Changes in the local directory instead of
@@ -362,16 +405,19 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
            ;; nasty hard coding an exception like this, but it gets the
            ;; right effect ... maybe some other common words shouldn't be
            ;; chased too)
-           (or type ;; but "use Changes" or "$Changes" is ok to keep going
+           ;; `type' "use Changes" or "$Changes" or "Changes.pm" ok to continue
+           (or type
                (not (equal (match-string 1) "Changes")))
 
            ;; don't chase down an RFC, prefer normal ffap lookup of that
-           (or type ;; but "use RFC" or "$RFC" is ok to keep going
+           ;; `type' "use RFC" or "$RFC" or "RFC.pm" ok to continue
+           (or type
                (not (save-match-data
                       (string-match "\\`RFC[ 0-9]*\\'" (match-string 1)))))
 
            ;; leading or trailing / or . on a single word means a filename
-           (or type ;; but "use Foo." or "$Foo." is ok to keep going
+           ;; `type' "use Foo." or "$Foo." or "Foo.pm." ok to continue
+           (or type
                (match-beginning 2) ;; match 2 means multi-word, is ok
                (and (not (memq (char-before (match-beginning 0)) '(?/ ?.)))
                     (not (memq (char-after  (match-end 0))       '(?/ ?.)))))
@@ -401,8 +447,8 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
                                        (match-string 1 modname))))
 
                ;; prefer .pm over .pod, even if .pod is earlier in the path
-               (or (ffap-locate-file basename '(".pm") (ffap-perl-module-path))
-                   (ffap-locate-file basename '(".pod") (ffap-perl-module-path))
+               (or (ffap-locate-file basename ext1 (ffap-perl-module-path))
+                   (ffap-locate-file basename ext2 (ffap-perl-module-path))
 
                    ;; try to prune one level, to avoid the big expand search
                    ;; for a List::Util::first etc call
@@ -554,7 +600,7 @@ MODNAME is a string like \"Foo::Bar::Quux\", the return simply
 has each \"::\" turned into \"/\" like \"Foo/Bar/Quux\"."
   (mapconcat 'identity (split-string modname ":+") "/"))
 
-;; LocalWords: usr docstring initializes func MFoo Quux subr PoCo Xyzzy Aaa Bbb Ccc Ddd stat alnum fallbacks
+;; LocalWords: usr docstring initializes func MFoo Quux subr PoCo Xyzzy Aaa Bbb Ccc Ddd stat alnum fallbacks perl filename filenames unicode ok subdirectories toplevel ascii utf internet Miquelon eg
 
 (provide 'ffap-perl-module)
 
