@@ -3,7 +3,7 @@
 ;; Copyright 2009, 2010, 2011 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 17
+;; Version: 18
 ;; Keywords: files
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -69,6 +69,7 @@
 ;; Version 16 - fix operators "&" and "&&" are not funcs
 ;;            - try one-level suffix prune before big prefix expand search
 ;; Version 17 - recognise Symbol.pm etc one word with .pm
+;; Version 18 - allow leading numbers in sub-parts, like Encode::KR::2022_KR
 
 ;;; Code:
 
@@ -164,24 +165,7 @@ churn deep through irrelevant directories."
 ;; unicode in variable names doesn't match there, you have to have point on
 ;; the (ascii) package name part.  What would be an easy better way?
 ;;
-(defconst ffap-perl-module-directory-regexp
-  (eval-when-compile
-    (let* ((alpha (if (string-match "[[:alpha:]]" "A")
-                      "[:alpha:]" "A-Za-z0-9"))
-           (alnum (if (string-match "[[:alnum:]]" "A")
-                      "[:alnum:]" "A-Za-z0-9"))
-           (word  (concat "[" alpha "_][" alnum "_]*")))
-      (concat "\\`" word "\\'")))
-  "Regexp for a directory name for packages.
-This matches only a single word like \"Moose\" without any \"/\"s
-etc.  It doesn't match .pm files to save some stat()s, and
-doesn't match . or .. to avoid an infinite loop searching!
-
-\[:alpha:] and [:alnum:] are used when available to maybe allow
-unicode in package names, if you're brave enough to have
-filenames in unicode.  A-Z fallbacks are used for xemacs21.")
-
-(eval-and-compile ;; for use in compile-time concats
+(eval-and-compile ;; used in compile-time concats
   (defconst ffap-perl-module-word-regexp
     (eval-when-compile
       (let* ((alpha (if (string-match "[[:alpha:]]" "A")
@@ -189,30 +173,50 @@ filenames in unicode.  A-Z fallbacks are used for xemacs21.")
              (alnum (if (string-match "[[:alnum:]]" "A")
                         "[:alnum:]" "A-Za-z0-9")))
         (concat "[" alpha "_][" alnum "_]*")))
-    "Regexp for a name with optional :: qualifiers.
-This matches for instance \"FindBin\" or \"Moose::Util::something\".
+    "Regexp for a module name without any \"::\".
+This matches for instance \"FindBin\".  It doesn't match
+\"Foo::Bar\", or only the \"Foo\" part.
 
 \[:alpha:] and [:alnum:] are used when available to allow unicode
-in variable names, and even in the package names (caveats as per
-`ffap-perl-module-directory-regexp').  A-Z fallbacks are used for
-xemacs21."))
+in the package name (if you trust that to match up with the
+filename on disk).  A-Z fallbacks are used for xemacs21."))
 
-(eval-and-compile ;; for use in compile-time concats
+(defconst ffap-perl-module-directory-regexp
+  (eval-when-compile
+    (let* ((alpha (if (string-match "[[:alpha:]]" "A")
+                      "[:alpha:]" "A-Za-z0-9"))
+           (alnum (if (string-match "[[:alnum:]]" "A")
+                      "[:alnum:]" "A-Za-z0-9"))
+           (later-word (concat "[" alnum "_]*")))
+      (concat "\\`" later-word "\\'")))
+  "Regexp for a directory name for packages.
+This matches only a single word like \"Moose\" or \"2022_KR\"
+without any \"/\"s etc.  It doesn't match a .pm extension, so as
+to save stat()ing them, and doesn't match . or .. to avoid an
+infinite loop searching!
+
+\[:alpha:] and [:alnum:] are used when available to maybe allow
+unicode in package names, if you trust that to match up with the
+filename on disk.  A-Z fallbacks are used for xemacs21.")
+
+(eval-and-compile ;; used in compile-time concats
   (defconst ffap-perl-module-qualif-regexp
     (eval-when-compile
       (let* ((alpha (if (string-match "[[:alpha:]]" "A")
                         "[:alpha:]" "A-Za-z0-9"))
              (alnum (if (string-match "[[:alnum:]]" "A")
                         "[:alnum:]" "A-Za-z0-9"))
-             (word  (concat "[" alpha "_][" alnum "_]*")))
-        (concat "\\(" word "\\(" "::" word "\\)*\\)")))
+             (first-word  (concat "[" alpha "_][" alnum "_]*"))
+             (later-word  (concat "[" alnum "_]*")))
+        (concat "\\(" first-word "\\(" "::" later-word "\\)*\\)")))
     "Regexp for a name with optional :: qualifiers.
-This matches for instance \"FindBin\" or \"Moose::Util::something\".
+This matches for instance \"FindBin\" or \"Moose::Util::something\"
+or \"Timebase::10Min\".
 
 \[:alpha:] and [:alnum:] are used when available to allow unicode
-in variable names, and even in the package names (caveats as per
-`ffap-perl-module-directory-regexp').  A-Z fallbacks are used for
-xemacs21."))
+in variable names, and even in the package names (if you trust
+that to match up with the filename on disk).  A-Z fallbacks are
+used for xemacs21."))
 
 (defun ffap-perl-module-file-at-point ()
   "Find the filename for a Perl module at point.
