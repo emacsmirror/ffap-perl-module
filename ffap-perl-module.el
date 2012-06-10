@@ -1,10 +1,10 @@
 ;;; ffap-perl-module.el --- find perl module at point with ffap
 
-;; Copyright 2009, 2010, 2011 Kevin Ryde
+;; Copyright 2009, 2010, 2011, 2012 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 18
-;; Keywords: files
+;; Version: 19
+;; Keywords: files, ffap, perl
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
 
@@ -70,6 +70,7 @@
 ;;            - try one-level suffix prune before big prefix expand search
 ;; Version 17 - recognise Symbol.pm etc one word with .pm
 ;; Version 18 - allow leading numbers in sub-parts, like Encode::KR::2022_KR
+;; Version 19 - narrow for speedup in big buffers
 
 ;;; Code:
 
@@ -110,7 +111,7 @@ See `ffap-perl-module-file-at-point' for details."
     ad-do-it))
 
 (defun ffap-perl-module-unload-function ()
-  "Remove advice on function `ffap-string-at-point'.
+  "Remove defadvice from function `ffap-string-at-point'.
 This is called by `unload-feature'."
   (when (ad-find-advice 'ffap-string-at-point 'around 'ffap-perl-module)
     (ad-remove-advice   'ffap-string-at-point 'around 'ffap-perl-module)
@@ -308,162 +309,170 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
            (looking-at "\\S-\\(\\s-\\|\\'\\)"))
          (goto-char (1- (point))))
 
-    ;; IN-USE-P is non-nil if we're looking at a "use", "no" or "require"
-    (let* ((case-fold-search nil)
-           (ext1 '(".pm"))
-           (ext2 '(".pod"))
-           type)
+    ;; Narrow to the current line as a speedup for big buffers.  This limits
+    ;; the amount of searching back and forward `thing-at-point-looking-at'
+    ;; will do in its works-around for the way re-search-backward doesn't
+    ;; match across point.
+    ;;
+    (save-restriction
+      (narrow-to-region (line-beginning-position) (line-end-position))
 
-      ;; `thing-at-point-looking-at' doesn't work well on a pattern with
-      ;; optional variable length prefix like say "\\(@\\s-*\\)?foo".  It's
-      ;; fine when you're on the @ of "@ foo", but if you're on the foo then
-      ;; the back-up char-by-char fails to match the space in between and
-      ;; stops there, without seeing there's an earlier @ which would
-      ;; succeed.  The way `re-search-backward' won't match across its start
-      ;; point is the basic culprit; the gambits in
-      ;; `thing-at-point-looking-at' to get around that don't cope with a
-      ;; multiple-char optional prefix.
-      ;;
-      ;; So the strategy is to try a variable name, variable name in {}, a
-      ;; use/no/require, then a bare word.  The backslashes "\" in the
-      ;; variables mean you can have point on a ref like \&foo and get foo
-      ;; matched.  There's nothing else done with the fact it's making a
-      ;; ref, it's just for point at the start of such a form.
-      ;;
-      (and (or
-            ;; command line: -MList::Util
-            (and (thing-at-point-looking-at
-                  (eval-when-compile
-                    (concat "\\(?:\\(?:\\`\\|\\s-\\)-MO=\\)"
-                            ffap-perl-module-qualif-regexp)))
-                 (setq type 'use-B))
+      ;; IN-USE-P is non-nil if we're looking at a "use", "no" or "require"
+      (let* ((case-fold-search nil) ;; case sensitive "use" etc
+             (ext1 '(".pm"))
+             (ext2 '(".pod"))
+             type)
 
-            ;; command line: -MO=Concise
-            (and (thing-at-point-looking-at
-                  (eval-when-compile
-                    (concat "\\(?:\\(?:\\`\\|\\s-\\)-M\\)"
-                            ffap-perl-module-qualif-regexp)))
-                 (setq type 'use))
+        ;; `thing-at-point-looking-at' doesn't work well on a pattern with
+        ;; optional variable length prefix like say "\\(@\\s-*\\)?foo".  It's
+        ;; fine when you're on the @ of "@ foo", but if you're on the foo then
+        ;; the back-up char-by-char fails to match the space in between and
+        ;; stops there, without seeing there's an earlier @ which would
+        ;; succeed.  The way `re-search-backward' won't match across its start
+        ;; point is the basic culprit; the gambits in
+        ;; `thing-at-point-looking-at' to get around that don't cope with a
+        ;; multiple-char optional prefix.
+        ;;
+        ;; So the strategy is to try a variable name, variable name in {}, a
+        ;; use/no/require, then a bare word.  The backslashes "\" in the
+        ;; variables mean you can have point on a ref like \&foo and get foo
+        ;; matched.  There's nothing else done with the fact it's making a
+        ;; ref, it's just for point at the start of such a form.
+        ;;
+        (and (or
+              ;; command line: -MList::Util
+              (and (thing-at-point-looking-at
+                    (eval-when-compile
+                      (concat "\\(?:\\(?:\\`\\|\\s-\\)-MO=\\)"
+                              ffap-perl-module-qualif-regexp)))
+                   (setq type 'use-B))
 
-            ;; variable: $List::Util::something
-            ;;           @Foo::Bar::something
-            ;; varref:   \\\%List::Util::something
-            ;; subr:     &List::Util::first
-            (and (thing-at-point-looking-at
-                  (eval-when-compile
-                    (concat "\\\\*[$@%&]"
-                            ffap-perl-module-qualif-regexp)))
-                 (setq type 'variable))
+              ;; command line: -MO=Concise
+              (and (thing-at-point-looking-at
+                    (eval-when-compile
+                      (concat "\\(?:\\(?:\\`\\|\\s-\\)-M\\)"
+                              ffap-perl-module-qualif-regexp)))
+                   (setq type 'use))
 
-            ;; variable: ${Foo::Bar::something}
-            ;; varref:   \\@{Foo::Bar::something}
-            ;; etc
-            (and (thing-at-point-looking-at
-                  (eval-when-compile
-                    (concat "\\\\*[$@%&]\\s-*{\\s-*"
-                            ffap-perl-module-qualif-regexp
-                            "\\s-*}")))
-                 (setq type 'variable))
+              ;; variable: $List::Util::something
+              ;;           @Foo::Bar::something
+              ;; varref:   \\\%List::Util::something
+              ;; subr:     &List::Util::first
+              (and (thing-at-point-looking-at
+                    (eval-when-compile
+                      (concat "\\\\*[$@%&]"
+                              ffap-perl-module-qualif-regexp)))
+                   (setq type 'variable))
 
-            ;; module: use warnings ...
-            ;;         no strict;
-            ;;         require List::Util;
-            (and (thing-at-point-looking-at
-                  (eval-when-compile
-                    (concat "\\(?:use\\|no\\|require\\)\\s-+"
-                            ffap-perl-module-qualif-regexp)))
-                 (setq type 'use))
+              ;; variable: ${Foo::Bar::something}
+              ;; varref:   \\@{Foo::Bar::something}
+              ;; etc
+              (and (thing-at-point-looking-at
+                    (eval-when-compile
+                      (concat "\\\\*[$@%&]\\s-*{\\s-*"
+                              ffap-perl-module-qualif-regexp
+                              "\\s-*}")))
+                   (setq type 'variable))
 
-            ;; Moose: extends 'List::Util'
-            ;;        extends "List::Util"
-            ;;        extends qw(Pod::Elemental)
-            ;; same in Mouse
-            (and (thing-at-point-looking-at
-                  (eval-when-compile
-                    (concat "\\(?:extends\\)\\s-+\\(?:['\"]\\|qw(\\)"
-                            ffap-perl-module-qualif-regexp
-                            "['\")]")))
-                 (setq type 'use))
+              ;; module: use warnings ...
+              ;;         no strict;
+              ;;         require List::Util;
+              (and (thing-at-point-looking-at
+                    (eval-when-compile
+                      (concat "\\(?:use\\|no\\|require\\)\\s-+"
+                              ffap-perl-module-qualif-regexp)))
+                   (setq type 'use))
 
-            ;; one word with pm: constant.pm Test.pod Inline.pm Inline.pod
-            (and (thing-at-point-looking-at
-                  (eval-when-compile ;; match 1 part to highlight and search
-                    (concat "\\(" ffap-perl-module-word-regexp
-                            "\\)\\.\\(pm\\|pod\\)")))
-                 (progn
-                   (when (equal (match-string 2) "pod")
-                     (setq ext1 '(".pod")  ;; search pod first if .pod
-                           ext2 '(".pm")))
-                   (setq type 'pm)))
+              ;; Moose: extends 'List::Util'
+              ;;        extends "List::Util"
+              ;;        extends qw(Pod::Elemental)
+              ;; same in Mouse
+              (and (thing-at-point-looking-at
+                    (eval-when-compile
+                      (concat "\\(?:extends\\)\\s-+\\(?:['\"]\\|qw(\\)"
+                              ffap-perl-module-qualif-regexp
+                              "['\")]")))
+                   (setq type 'use))
 
-            ;; plain: List::Util
-            ;; double-colon bareword: List::Util::
-            ;; (match the final :: so it works with point on those colons)
-            (thing-at-point-looking-at
-             (eval-when-compile
-               (concat ffap-perl-module-qualif-regexp "\\(::\\)?"))))
+              ;; one word with pm: constant.pm Test.pod Inline.pm Inline.pod
+              (and (thing-at-point-looking-at
+                    (eval-when-compile ;; match 1 part to highlight and search
+                      (concat "\\(" ffap-perl-module-word-regexp
+                              "\\)\\.\\(pm\\|pod\\)")))
+                   (progn
+                     (when (equal (match-string 2) "pod")
+                       (setq ext1 '(".pod")  ;; search pod first if .pod
+                             ext2 '(".pm")))
+                     (setq type 'pm)))
 
-           ;; don't chase down a bare word "Changes", prefer a normal ffap
-           ;; of a file called Changes in the local directory instead of
-           ;; DBI/Changes.pm which is the DBI package news file (it's a bit
-           ;; nasty hard coding an exception like this, but it gets the
-           ;; right effect ... maybe some other common words shouldn't be
-           ;; chased too)
-           ;; `type' "use Changes" or "$Changes" or "Changes.pm" ok to continue
-           (or type
-               (not (equal (match-string 1) "Changes")))
+              ;; plain: List::Util
+              ;; double-colon bareword: List::Util::
+              ;; (match the final :: so it works with point on those colons)
+              (thing-at-point-looking-at
+               (eval-when-compile
+                 (concat ffap-perl-module-qualif-regexp "\\(::\\)?"))))
 
-           ;; don't chase down an RFC, prefer normal ffap lookup of that
-           ;; `type' "use RFC" or "$RFC" or "RFC.pm" ok to continue
-           (or type
-               (not (save-match-data
-                      (string-match "\\`RFC[ 0-9]*\\'" (match-string 1)))))
+             ;; don't chase down a bare word "Changes", prefer a normal ffap
+             ;; of a file called Changes in the local directory instead of
+             ;; DBI/Changes.pm which is the DBI package news file (it's a bit
+             ;; nasty hard coding an exception like this, but it gets the
+             ;; right effect ... maybe some other common words shouldn't be
+             ;; chased too)
+             ;; `type' "use Changes" or "$Changes" or "Changes.pm" ok to continue
+             (or type
+                 (not (equal (match-string 1) "Changes")))
 
-           ;; leading or trailing / or . on a single word means a filename
-           ;; `type' "use Foo." or "$Foo." or "Foo.pm." ok to continue
-           (or type
-               (match-beginning 2) ;; match 2 means multi-word, is ok
-               (and (not (memq (char-before (match-beginning 0)) '(?/ ?.)))
-                    (not (memq (char-after  (match-end 0))       '(?/ ?.)))))
+             ;; don't chase down an RFC, prefer normal ffap lookup of that
+             ;; `type' "use RFC" or "$RFC" or "RFC.pm" ok to continue
+             (or type
+                 (not (save-match-data
+                        (string-match "\\`RFC[ 0-9]*\\'" (match-string 1)))))
 
-           ;; functions and variables $FOO or &foo must have at least one ::
-           ;; qualifier for the package part
-           (or (not (eq type 'variable))
-               (match-beginning 2))
+             ;; leading or trailing / or . on a single word means a filename
+             ;; `type' "use Foo." or "$Foo." or "Foo.pm." ok to continue
+             (or type
+                 (match-beginning 2) ;; match 2 means multi-word, is ok
+                 (and (not (memq (char-before (match-beginning 0)) '(?/ ?.)))
+                      (not (memq (char-after  (match-end 0))       '(?/ ?.)))))
 
-           ;; for variables etc beginning $ @ % & strip the variable name to
-           ;; get the package part
-           (setq ffap-string-at-point-region
-                 (list (match-beginning 1)
-                       (if (eq type 'variable)
-                           (match-beginning 2) ;; before last "::foo"
-                         (match-end 1))))
+             ;; functions and variables $FOO or &foo must have at least one ::
+             ;; qualifier for the package part
+             (or (not (eq type 'variable))
+                 (match-beginning 2))
 
-           (let ((modname (apply 'buffer-substring
-                                 ffap-string-at-point-region)))
-             (if (eq type 'use-B)
-                 (setq modname (concat "B::" modname)
-                       type    'use))
-             (let ((basename (ffap-perl-module-modname-to-filename modname)))
+             ;; for variables etc beginning $ @ % & strip the variable name to
+             ;; get the package part
+             (setq ffap-string-at-point-region
+                   (list (match-beginning 1)
+                         (if (eq type 'variable)
+                             (match-beginning 2) ;; before last "::foo"
+                           (match-end 1))))
 
-               (when (string-match "\\`PoCo\\(::.*\\)?\\'" modname)
-                 (setq modname (concat "POE::Component"
-                                       (match-string 1 modname))))
+             (let ((modname (apply 'buffer-substring
+                                   ffap-string-at-point-region)))
+               (if (eq type 'use-B)
+                   (setq modname (concat "B::" modname)
+                         type    'use))
+               (let ((basename (ffap-perl-module-modname-to-filename modname)))
 
-               ;; prefer .pm over .pod, even if .pod is earlier in the path
-               (or (ffap-locate-file basename ext1 (ffap-perl-module-path))
-                   (ffap-locate-file basename ext2 (ffap-perl-module-path))
+                 (when (string-match "\\`PoCo\\(::.*\\)?\\'" modname)
+                   (setq modname (concat "POE::Component"
+                                         (match-string 1 modname))))
 
-                   ;; try to prune one level, to avoid the big expand search
-                   ;; for a List::Util::first etc call
-                   (ffap-perl-module-prune-suffix modname 1)
+                 ;; prefer .pm over .pod, even if .pod is earlier in the path
+                 (or (ffap-locate-file basename ext1 (ffap-perl-module-path))
+                     (ffap-locate-file basename ext2 (ffap-perl-module-path))
 
-                   ;; if there's no exact match then try the prefix business
-                   ;; (but not on variables), then suffix pruning
-                   (and (not (eq type 'variable))
-                        (ffap-perl-module-expand-prefix modname))
+                     ;; try to prune one level, to avoid the big expand search
+                     ;; for a List::Util::first etc call
+                     (ffap-perl-module-prune-suffix modname 1)
 
-                   (ffap-perl-module-prune-suffix modname))))))))
+                     ;; if there's no exact match then try the prefix business
+                     ;; (but not on variables), then suffix pruning
+                     (and (not (eq type 'variable))
+                          (ffap-perl-module-expand-prefix modname))
+
+                     (ffap-perl-module-prune-suffix modname)))))))))
 
 (defun ffap-perl-module-expand-prefix (modname)
   "Try to find MODNAME by putting a package prefix on it.
@@ -604,7 +613,7 @@ MODNAME is a string like \"Foo::Bar::Quux\", the return simply
 has each \"::\" turned into \"/\" like \"Foo/Bar/Quux\"."
   (mapconcat 'identity (split-string modname ":+") "/"))
 
-;; LocalWords: usr docstring initializes func MFoo Quux subr PoCo Xyzzy Aaa Bbb Ccc Ddd stat alnum fallbacks perl filename filenames unicode ok subdirectories toplevel ascii utf internet Miquelon eg
+;; LocalWords: usr docstring initializes func MFoo Quux subr PoCo Xyzzy Aaa Bbb Ccc Ddd stat alnum fallbacks perl filename filenames unicode ok subdirectories toplevel ascii utf internet Miquelon eg ing el
 
 (provide 'ffap-perl-module)
 
