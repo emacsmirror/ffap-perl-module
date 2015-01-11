@@ -1,9 +1,9 @@
 ;;; ffap-perl-module.el --- find perl module at point with ffap
 
-;; Copyright 2009, 2010, 2011, 2012 Kevin Ryde
+;; Copyright 2009, 2010, 2011, 2012, 2013, 2014 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 19
+;; Version: 23
 ;; Keywords: files, ffap, perl
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -37,8 +37,8 @@
 
 ;;; Emacsen:
 
-;; Designed for Emacs 21 up.  Works in Emacs 20 and XEmacs 21 except doesn't
-;; recognise non-ASCII in Perl class names and variable names.
+;; Designed for Emacs 21 up.  Works in Emacs 20 and XEmacs 21 except there
+;; doesn't recognise non-ASCII in Perl class names and variable names.
 
 ;;; Install:
 
@@ -71,12 +71,27 @@
 ;; Version 17 - recognise Symbol.pm etc one word with .pm
 ;; Version 18 - allow leading numbers in sub-parts, like Encode::KR::2022_KR
 ;; Version 19 - narrow for speedup in big buffers
+;; Version 20 - use `ignore-errors'
+;; Version 21 - also "-MFoo" with preceding quote ' or "
+;; Version 22 - don't search for an OEIS A-number as a module
+;; Version 23 - ahead of looseness in Emacs 24.4 ffap-url-at-point
 
 ;;; Code:
 
-;; for `ad-find-advice' macro when running uncompiled,
-;; don't unload 'advice before ffap-perl-module-unload-function
+;; Explicit dependency on advice.el since `ffap-perl-module-unload-function'
+;; needs `ad-find-advice' macro when running not byte compiled and that
+;; macro is not autoloaded.
 (require 'advice)
+
+(eval-when-compile
+  (unless (and (fboundp 'ignore-errors)
+               (fboundp 'dolist))
+    (require 'cl)))
+
+(require 'ffap)
+
+
+;;-----------------------------------------------------------------------------
 
 ;;;###autoload
 (defcustom ffap-perl-module-path nil
@@ -89,37 +104,12 @@ Perl's @INC when you first attempt an `ffap' Perl module lookup."
           :tag "ffap-perl-module.el home page"
           "http://user42.tuxfamily.org/ffap-perl-module/index.html"))
 
-(defadvice ffap-string-at-point (around ffap-perl-module activate)
-  "Extract a Perl module filename at point.
-See `ffap-perl-module-file-at-point' for details."
 
-  ;; The expand-prefix stuff is a bit slow, so only run for mode==nil, not
-  ;; url, machine, etc.  For the same reason prefer a filename at point over
-  ;; a search, in particular this stops "Makefile" at point from churning
-  ;; all the perl dirs when it's a filename rather than a module.
-  ;;
-  ;; args: (ffap-string-at-point &optional MODE)
-  (unless (let ((mode (ad-get-arg 0)))
-            (and (not mode)
-                 (not (ffap-perl-module-existing-file-at-point-p))
-                 (let ((filename (ffap-perl-module-file-at-point)))
-                   (and filename
-                        (progn
-                          (set-text-properties 0 (length filename) nil filename)
-                          (setq ad-return-value
-                                (setq ffap-string-at-point filename)))))))
-    ad-do-it))
-
-(defun ffap-perl-module-unload-function ()
-  "Remove defadvice from function `ffap-string-at-point'.
-This is called by `unload-feature'."
-  (when (ad-find-advice 'ffap-string-at-point 'around 'ffap-perl-module)
-    (ad-remove-advice   'ffap-string-at-point 'around 'ffap-perl-module)
-    (ad-activate        'ffap-string-at-point))
-  nil) ;; and do normal unload-feature actions too
+;;-----------------------------------------------------------------------------
 
 (defun ffap-perl-module-existing-file-at-point-p ()
-  "Return non-nil if there's a filename at point and that file exists."
+  "An internal part of ffap-perl-module.el.
+Return non-nil if there's a filename at point and that file exists."
 
   ;; `substitute-in-file-name' throws an error for an unknown environment
   ;; variable "$NOSUCH" or "${NOSUCH}", or an unpaired brace "${HOME",
@@ -131,25 +121,26 @@ This is called by `unload-feature'."
   (let ((filename (ffap-string-at-point 'file)))
     (and filename
          ;; unknown ${NOSUCH} variables treated as a non-existent filename
-         (condition-case nil
-             (setq filename (substitute-in-file-name filename))
-           (error nil))
+         (ignore-errors
+           (setq filename (substitute-in-file-name filename)))
          ;; any remote syntax filename is considered to exist
          (or (ffap-file-remote-p filename)
              (file-exists-p filename)))))
 
 
 (defun ffap-perl-module-path ()
-  "Return a list of directory names to search for Perl modules.
-This function returns variable `ffap-perl-module-path' if it's not nil,
-or initializes that by running \"perl -e print @INC\" for the
-places Perl will look, which is usually various /usr/share, /usr/local,
-and whatever your PERL5LIB says.
+  "An internal part of ffap-perl-module.el.
+Return a list of directory names to search for Perl modules.
 
-The current directory \".\" which is normally in @INC is
-deliberately excluded from the default calculation.  It's a bit
-of a security hole and too easily makes `ffap-perl-module-expand-prefix'
-churn deep through irrelevant directories."
+This function returns variable `ffap-perl-module-path' if it's
+not nil, or initializes that by running \"perl -e print @INC\" to
+get the places Perl will look, which is usually various
+/usr/share, /usr/local, and whatever $PERL5LIB says.
+
+The current directory \".\" is normally in @INC but is
+deliberately excluded here.  It's a bit of a security hole and
+too easily makes `ffap-perl-module-expand-prefix' churn deep
+through irrelevant directories."
 
   (or ffap-perl-module-path
       (with-temp-buffer
@@ -174,7 +165,8 @@ churn deep through irrelevant directories."
              (alnum (if (string-match "[[:alnum:]]" "A")
                         "[:alnum:]" "A-Za-z0-9")))
         (concat "[" alpha "_][" alnum "_]*")))
-    "Regexp for a module name without any \"::\".
+    "An internal part of ffap-perl-module.el.
+Regexp for a module name without any \"::\".
 This matches for instance \"FindBin\".  It doesn't match
 \"Foo::Bar\", or only the \"Foo\" part.
 
@@ -190,7 +182,8 @@ filename on disk).  A-Z fallbacks are used for xemacs21."))
                       "[:alnum:]" "A-Za-z0-9"))
            (later-word (concat "[" alnum "_]*")))
       (concat "\\`" later-word "\\'")))
-  "Regexp for a directory name for packages.
+  "An internal part of ffap-perl-module.el.
+Regexp for a directory name for packages.
 This matches only a single word like \"Moose\" or \"2022_KR\"
 without any \"/\"s etc.  It doesn't match a .pm extension, so as
 to save stat()ing them, and doesn't match . or .. to avoid an
@@ -210,7 +203,8 @@ filename on disk.  A-Z fallbacks are used for xemacs21.")
              (first-word  (concat "[" alpha "_][" alnum "_]*"))
              (later-word  (concat "[" alnum "_]*")))
         (concat "\\(" first-word "\\(" "::" later-word "\\)*\\)")))
-    "Regexp for a name with optional :: qualifiers.
+    "An internal part of ffap-perl-module.el.
+Regexp for a name with optional :: qualifiers.
 This matches for instance \"FindBin\" or \"Moose::Util::something\"
 or \"Timebase::10Min\".
 
@@ -220,7 +214,8 @@ that to match up with the filename on disk).  A-Z fallbacks are
 used for xemacs21."))
 
 (defun ffap-perl-module-file-at-point ()
-  "Find the filename for a Perl module at point.
+  "An internal part of ffap-perl-module.el.
+Return the filename for a Perl module at point.
 For example with point on Foo::Bar the return could be
 \"/usr/share/perl5/Foo/Bar.pm\".  If there's nothing in
 `ffap-perl-module-path' for a package at point then the return is
@@ -254,21 +249,20 @@ nil.
   is in your `ffap-perl-module-path' and subdirectories.  Use
   \\[keyboard-quit] in the usual way to stop it.
 
-* constant.pm etc one word with .pm or .pod is recognised, it
+* \"foo.pm\" etc one word with .pm or .pod is recognised, it
   being sometimes clearer to write a .pm when referring to the
   toplevel modules.
 
-* constant etc one word without any \"::\" will go to constant.pm
-  for the toplevel Perl modules.  But a leading or trailing / or
-  . is taken to mean a filename, not a package name, and the
-  return is nil in that case.  The latter rule prevents for
-  instance \"sort.el\" from offering sort.pm.
+* \"foo\" etc one word without any \"::\" will go to foo.pm for
+  the toplevel Perl modules.  But a leading or trailing / or . is
+  taken to mean a filename, not a package name, and the return is
+  nil in that case.  The latter rule prevents for instance
+  \"sort.el\" from offering sort.pm.
 
 * If there's no .pm file for the package but there's a .pod then
   that's returned.  This is good for pseudo-packages like
-  Module::Build::Cookbook which are just documentation.  \(A
-  toplevel like Carp.pod with \".pod\" of course prefers the .pod
-  to the .pm.)
+  Module::Build::Cookbook which are just documentation.  \(When
+  the extension is \".pod\" a .pod is preferred over .pm.)
 
 * PoCo is recognised as an abbreviation for POE::Component, as
   found in documentation (the code is always the full name).
@@ -277,8 +271,8 @@ nil.
   XEmacs21.  Put point on the package name part instead.
 
   Non-ascii package names are matched in Emacs, but it's up to
-  you to ensure any Perl \"use utf8\" and your locale and Emacs
-  `file-name-coding-system' and the actual bytes in the name on
+  you to ensure any Perl \"use utf8\", your locale, your Emacs
+  `file-name-coding-system', and the actual bytes in the name on
   disk all coincide.  That may be asking for trouble most of the
   time! :-)
 
@@ -286,12 +280,13 @@ This function is designed for use under `ffap' so it sets
 `ffap-string-at-point-region' to the part of the buffer
 identified as the package name.
 
-`ffap' normally takes \"constant.pm\" etc as a host name, since
-.pm is a toplevel internet domain (\"Saint Pierre and
-Miquelon\").  But with this ffap-perl-module, the way `ffap'
-looks for local files before machines means a .pm Perl module is
-tried before a ping of a foo.pm machine.
+`ffap' normally takes \"foo.pm\" etc as a host name, since .pm is
+a toplevel internet domain (\"Saint Pierre and Miquelon\").  But
+with this ffap-perl-module, the way `ffap' looks for local files
+before machines means a .pm Perl module is tried before a ping of
+a foo.pm machine.
 
+----
 The ffap-perl-module.el home page is
 URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
 
@@ -343,14 +338,14 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
               ;; command line: -MList::Util
               (and (thing-at-point-looking-at
                     (eval-when-compile
-                      (concat "\\(?:\\(?:\\`\\|\\s-\\)-MO=\\)"
+                      (concat "\\(?:\\(?:\\`\\|\\s-\\|['\"]\\)-MO=\\)"
                               ffap-perl-module-qualif-regexp)))
                    (setq type 'use-B))
 
               ;; command line: -MO=Concise
               (and (thing-at-point-looking-at
                     (eval-when-compile
-                      (concat "\\(?:\\(?:\\`\\|\\s-\\)-M\\)"
+                      (concat "\\(?:\\(?:\\`\\|\\s-\\|['\"]\\)-M\\)"
                               ffap-perl-module-qualif-regexp)))
                    (setq type 'use))
 
@@ -422,11 +417,19 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
              (or type
                  (not (equal (match-string 1) "Changes")))
 
-             ;; don't chase down an RFC, prefer normal ffap lookup of that
-             ;; `type' "use RFC" or "$RFC" or "RFC.pm" ok to continue
+             ;; Don't chase down an RFC, prefer normal ffap lookup of that.
+             ;; `type' "use RFC" or "$RFC" or "RFC.pm" ok to continue.
              (or type
                  (not (save-match-data
                         (string-match "\\`RFC[ 0-9]*\\'" (match-string 1)))))
+
+             ;; Don't search for an OEIS A-number.  This is a bit of a hack,
+             ;; would prefer to have Perl module tried after an A-number.
+             ;; `type' like "use A000001" or "$A000001" or "A000001.pm" are
+             ;; ok to to continue though.
+             (or type
+                 (not (save-match-data
+                        (string-match "\\`A[0-9]\\{6,7\\}\\'" (match-string 1)))))
 
              ;; leading or trailing / or . on a single word means a filename
              ;; `type' "use Foo." or "$Foo." or "Foo.pm." ok to continue
@@ -475,7 +478,8 @@ URL `http://user42.tuxfamily.org/ffap-perl-module/index.html'"
                      (ffap-perl-module-prune-suffix modname)))))))))
 
 (defun ffap-perl-module-expand-prefix (modname)
-  "Try to find MODNAME by putting a package prefix on it.
+  "An internal part of ffap-perl-module.el.
+Try to find MODNAME by putting a package prefix on it.
 This some internals of `ffap-perl-module-file-at-point'.
 
 MODNAME like \"Foo::Bar\" is sought with some prefix on it, like
@@ -488,7 +492,6 @@ is returned, if not nil is returned.  If there's no .pm files at
 all for MODNAME, then .pod is sought instead with the same
 rules."
 
-  (eval-and-compile (require 'cl))
   (catch 'stop
     (let* ((basename     (ffap-perl-module-modname-to-filename modname))
            (pm-basename  (concat basename ".pm"))
@@ -500,16 +503,18 @@ rules."
         ;; DIRLIST is absolute paths of directories to contemplate.  An
         ;; entry is taken off to inspect and its subdirectories are pushed
         ;; on, until no further directories and subdirectories exist.
-        (let ((dirlist (condition-case nil
-                           (directory-files
-                            pathdir t ffap-perl-module-directory-regexp
-                            t)  ;; no sort
-                         (error nil))))
+        (let ((dirlist (ignore-errors
+                         (directory-files
+                          pathdir t ffap-perl-module-directory-regexp
+                          t))))  ;; no sort
+
           ;; toplevel "auto" only has AutoSplit .al files
           ;; toplevel "LocaleData" only has .mo files for Locale::TextDomain
           ;; exclude these to shorten the search
-          (setq dirlist (remove* "/\\(auto\\|LocaleData\\)\\'"
-                                 dirlist :test 'string-match))
+          (dolist (dir dirlist)
+            (if (string-match "/\\(auto\\|LocaleData\\)\\'" dir)
+                (setq dirlist (delete dir dirlist))))
+
           (while dirlist
             ;; A few attempts (in emacs22) had it faster to set
             ;; default-directory and let directory-files give absolute
@@ -554,18 +559,18 @@ rules."
             ;; successful search must traverse everything, so the order
             ;; doesn't matter all that much.
             (setq dirlist (nconc dirlist
-                                 (condition-case nil
-                                     (directory-files
-                                      default-directory t
-                                      ffap-perl-module-directory-regexp
-                                      t)  ;; no sort
-                                   (error nil)))))))
+                                 (ignore-errors
+                                   (directory-files
+                                    default-directory t
+                                    ffap-perl-module-directory-regexp
+                                    t)))))))  ;; no sort
       (or found-pm-filename
           found-pod-filename))))
           
 (defun ffap-perl-module-prune-suffix (modname &optional limit)
   ;; checkdoc-params: (modname limit)
-  "Try to match MODNAME with suffix parts pruned off.
+  "An internal part of ffap-perl-module.el.
+Try to match MODNAME with suffix parts pruned off.
 This is an internal part of `ffap-perl-module-file-at-point.
 
 MODNAME like \"Aaa::Bbb::Ccc::Ddd\" is looked up shortened first
@@ -599,7 +604,7 @@ shortened according to how much was pruned off MODNAME."
             (throw 'stop filename))
 
           (and limit
-               (< (decf limit) 0)
+               (< (setq limit (1- limit)) 0)
                (throw 'stop nil))
           
           ;; strip last so Foo::Bar::Quux becomes Foo::Bar, or nil when no
@@ -608,12 +613,74 @@ shortened according to how much was pruned off MODNAME."
                              (match-string 1 modname))))))))
 
 (defun ffap-perl-module-modname-to-filename (modname)
-  "Return a filename for Perl module MODNAME.
+  "An internal part of ffap-perl-module.el.
+Return a filename for Perl module MODNAME.
 MODNAME is a string like \"Foo::Bar::Quux\", the return simply
 has each \"::\" turned into \"/\" like \"Foo/Bar/Quux\"."
   (mapconcat 'identity (split-string modname ":+") "/"))
 
-;; LocalWords: usr docstring initializes func MFoo Quux subr PoCo Xyzzy Aaa Bbb Ccc Ddd stat alnum fallbacks perl filename filenames unicode ok subdirectories toplevel ascii utf internet Miquelon eg ing el
+
+;;-----------------------------------------------------------------------------
+;; In Emacs 24.4 the looseness of ffap-url-at-point makes it take say
+;; List::Util as a URL.  Look for Perl modules at the start of ffap-guesser,
+;; before it tries ffap-url-at-point.
+;;
+(defadvice ffap-guesser (around ffap-perl-module activate)
+  "Extract a Perl module filename at point.
+See `ffap-perl-module-file-at-point' for details."
+
+  ;; The expand-prefix stuff is a bit slow, so prefer a filename at point
+  ;; over a search, in particular this stops "Makefile" at point from
+  ;; churning all the perl dirs when it's a filename rather than a module.
+  ;;
+  (unless (and (not (ffap-perl-module-existing-file-at-point-p))
+               (let ((filename (ffap-perl-module-file-at-point)))
+                 (and filename
+                      (progn
+                        (set-text-properties 0 (length filename) nil filename)
+                        (setq ad-return-value filename)))))
+    ad-do-it))
+
+;; Can't remember why previously hooked onto ffap-string-at-point and not
+;; ffap-file-at-point.  Probably to get ahead of some other check, but what?
+;; In any case the `ffap-guesser' stage above seems to work.
+;;
+;; (defadvice ffap-string-at-point (around ffap-perl-module activate)
+;;   "Extract a Perl module filename at point.
+;; See `ffap-perl-module-file-at-point' for details."
+;; 
+;;   ;; The expand-prefix stuff is a bit slow, so only run for mode==nil, not
+;;   ;; url, machine, etc.  For the same reason prefer a filename at point over
+;;   ;; a search, in particular this stops "Makefile" at point from churning
+;;   ;; all the perl dirs when it's a filename rather than a module.
+;;   ;;
+;;   ;; args: (ffap-string-at-point &optional MODE)
+;;   (unless (let ((mode (ad-get-arg 0)))
+;;             (and (not mode)
+;;                  (not (ffap-perl-module-existing-file-at-point-p))
+;;                  (let ((filename (ffap-perl-module-file-at-point)))
+;;                    (and filename
+;;                         (progn
+;;                           (set-text-properties 0 (length filename) nil filename)
+;;                           (setq ad-return-value
+;;                                 (setq ffap-string-at-point filename)))))))
+;;     ad-do-it))
+
+(defun ffap-perl-module-unload-function ()
+  "An internal part of ffap-perl-module.el.
+Remove defadvice from function `ffap-string-at-point'.
+This is called by `unload-feature'."
+  (when (ad-find-advice 'ffap-guesser 'around 'ffap-perl-module)
+    (ad-remove-advice   'ffap-guesser 'around 'ffap-perl-module)
+    (ad-activate        'ffap-guesser))
+  nil) ;; and do normal unload-feature actions too
+
+
+;;-----------------------------------------------------------------------------
+;; LocalWords: usr docstring initializes func foo Foo MFoo Quux subr PoCo
+;; LocalWords: Xyzzy Aaa Bbb Ccc Ddd stat alnum fallbacks perl filename
+;; LocalWords: filenames unicode ok subdirectories toplevel ascii utf
+;; LocalWords: internet Miquelon eg ing el pm
 
 (provide 'ffap-perl-module)
 
