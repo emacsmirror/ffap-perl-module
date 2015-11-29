@@ -1,9 +1,9 @@
 ;;; ffap-perl-module.el --- find perl module at point with ffap
 
-;; Copyright 2009, 2010, 2011, 2012, 2013, 2014 Kevin Ryde
+;; Copyright 2009, 2010, 2011, 2012, 2013, 2014, 2015 Kevin Ryde
 
-;; Author: Kevin Ryde <user42@zip.com.au>
-;; Version: 23
+;; Author: Kevin Ryde <user42_kevin@yahoo.com.au>
+;; Version: 24
 ;; Keywords: files, ffap, perl
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -33,12 +33,12 @@
 ;; details.
 ;;
 ;; The lookup is independent of the major mode, so you can be in Man-mode,
-;; diff-mode, pod-mode or whatever and still go to Perl source.
+;; diff-mode, pod-mode etc and still go to Perl source.
 
 ;;; Emacsen:
 
-;; Designed for Emacs 21 up.  Works in Emacs 20 and XEmacs 21 except there
-;; doesn't recognise non-ASCII in Perl class names and variable names.
+;; Designed for Emacs 21 up.  Works in Emacs 20 and XEmacs 21 except for
+;; them doesn't recognise non-ASCII in Perl class names and variable names.
 
 ;;; Install:
 
@@ -75,6 +75,7 @@
 ;; Version 21 - also "-MFoo" with preceding quote ' or "
 ;; Version 22 - don't search for an OEIS A-number as a module
 ;; Version 23 - ahead of looseness in Emacs 24.4 ffap-url-at-point
+;; Version 24 - new email
 
 ;;; Code:
 
