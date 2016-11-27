@@ -1,9 +1,9 @@
 ;;; ffap-perl-module.el --- find perl module at point with ffap
 
-;; Copyright 2009, 2010, 2011, 2012, 2013, 2014, 2015 Kevin Ryde
+;; Copyright 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Kevin Ryde
 
 ;; Author: Kevin Ryde <user42_kevin@yahoo.com.au>
-;; Version: 24
+;; Version: 25
 ;; Keywords: files, ffap, perl
 ;; URL: http://user42.tuxfamily.org/ffap-perl-module/index.html
 ;; EmacsWiki: FindFileAtPoint
@@ -76,6 +76,7 @@
 ;; Version 22 - don't search for an OEIS A-number as a module
 ;; Version 23 - ahead of looseness in Emacs 24.4 ffap-url-at-point
 ;; Version 24 - new email
+;; Version 25 - an unused variable
 
 ;;; Code:
 
@@ -177,9 +178,7 @@ filename on disk).  A-Z fallbacks are used for xemacs21."))
 
 (defconst ffap-perl-module-directory-regexp
   (eval-when-compile
-    (let* ((alpha (if (string-match "[[:alpha:]]" "A")
-                      "[:alpha:]" "A-Za-z0-9"))
-           (alnum (if (string-match "[[:alnum:]]" "A")
+    (let* ((alnum (if (string-match "[[:alnum:]]" "A")
                       "[:alnum:]" "A-Za-z0-9"))
            (later-word (concat "[" alnum "_]*")))
       (concat "\\`" later-word "\\'")))
@@ -572,7 +571,6 @@ rules."
   ;; checkdoc-params: (modname limit)
   "An internal part of ffap-perl-module.el.
 Try to match MODNAME with suffix parts pruned off.
-This is an internal part of `ffap-perl-module-file-at-point.
 
 MODNAME like \"Aaa::Bbb::Ccc::Ddd\" is looked up shortened first
 to \"Aaa::Bbb::Ccc\" then \"Aaa::Bbb\" and finally \"Aaa\".  The
